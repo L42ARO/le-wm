@@ -46,6 +46,9 @@ def lejepa_forward(self, batch, stage, cfg):
 
 @hydra.main(version_base=None, config_path="./config/train", config_name="lewm")
 def run(cfg):
+    if cfg.get("float32_matmul_precision"):
+        torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
+
     #########################
     ##       dataset       ##
     #########################
@@ -129,12 +132,18 @@ def run(cfg):
         enable_checkpointing=True,
     )
 
-    ckpt_path = run_dir / f"{cfg.output_model_name}_weights.ckpt"
+    ckpt_path = cfg.get("resume_ckpt_path")
+    if ckpt_path is None:
+        default_ckpt_path = run_dir / f"{cfg.output_model_name}_weights.ckpt"
+        ckpt_path = str(default_ckpt_path) if default_ckpt_path.exists() else None
+
     manager = spt.Manager(
         trainer=trainer,
         module=world_model,
         data=data_module,
-        ckpt_path=ckpt_path if ckpt_path.exists() else None,
+        seed=cfg.seed,
+        ckpt_path=ckpt_path,
+        weights_only=cfg.resume_weights_only,
     )
 
     manager()

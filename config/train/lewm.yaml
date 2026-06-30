@@ -13,6 +13,9 @@ seed: 3072
 img_size: 224
 embed_dim: 192
 history_size: 3
+resume_ckpt_path: null
+resume_weights_only: false
+float32_matmul_precision: high
 
 trainer:
   max_epochs: 100
