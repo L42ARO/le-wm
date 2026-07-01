@@ -21,13 +21,24 @@ DATASETS_DIR="$DATA_DIR/datasets"
 PYTHON="$ROOT_DIR/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "Creating README-compatible local venv at .venv..."
-  uv venv --python=3.10
+  if command -v uv >/dev/null 2>&1; then
+    uv venv --python=3.10
+  elif command -v python3.10 >/dev/null 2>&1; then
+    python3.10 -m venv .venv
+  else
+    echo "Error: neither uv nor python3.10 is available to create .venv"
+    exit 1
+  fi
 fi
 
 mkdir -p "$DATASETS_DIR"
 
 echo "Installing dataset download dependencies..."
-uv pip install --python "$PYTHON" huggingface_hub zstandard
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --python "$PYTHON" huggingface_hub zstandard hdf5plugin
+else
+  "$PYTHON" -m pip install huggingface_hub zstandard hdf5plugin
+fi
 
 download_hf_file() {
   local repo="$1"
@@ -83,13 +94,10 @@ convert_to_lance() {
   fi
 
   echo "Converting $dataset_name to Lance: $target_lance"
-  "$PYTHON" - "$source_h5" "$target_lance" <<'PY'
-import sys
-from stable_worldmodel.data import convert
-
-source, dest = sys.argv[1:]
-convert(source, dest, source_format="hdf5", dest_format="lance", mode="overwrite")
-PY
+  "$PYTHON" "$ROOT_DIR/data/hdf5_to_lance.py" \
+    "$source_h5" \
+    "$target_lance" \
+    --mode overwrite
 }
 
 ensure_pusht_lance() {

@@ -6,7 +6,7 @@ seed: 3072
 img_size: 224
 embed_dim: 192
 history_size: 3
-resume_ckpt_path: /home/ubuntu/.cache/stable-pretraining/runs/20260630/084742/7754b39caaf6/checkpoints/last.ckpt
+resume_ckpt_path: /home/ubuntu/le-wm/last.ckpt
 resume_weights_only: false
 float32_matmul_precision: high
 trainer:
@@ -16,7 +16,7 @@ trainer:
   precision: bf16
   gradient_clip_val: 1.0
 loader:
-  batch_size: 128
+  batch_size: 386
   num_workers: ${num_workers}
   persistent_workers: true
   prefetch_factor: 1
