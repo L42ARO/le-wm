@@ -26,9 +26,18 @@ def img_transform(cfg):
     return transform
 
 
-def get_episodes_length(dataset, episodes):
-    col_name = "episode_idx" if "episode_idx" in dataset.column_names else "ep_idx"
+def get_episode_index_column(dataset):
+    for col_name in ("episode_idx", "ep_idx"):
+        try:
+            dataset.get_col_data(col_name)
+            return col_name
+        except Exception:
+            continue
+    raise KeyError("Dataset is missing both 'episode_idx' and 'ep_idx' columns.")
 
+
+def get_episodes_length(dataset, episodes):
+    col_name = get_episode_index_column(dataset)
     episode_idx = dataset.get_col_data(col_name)
     step_idx = dataset.get_col_data("step_idx")
     lengths = []
@@ -39,8 +48,23 @@ def get_episodes_length(dataset, episodes):
 
 def get_dataset(cfg, dataset_name):
     dataset_path = Path(cfg.cache_dir or swm.data.utils.get_cache_dir())
-    dataset = swm.data.HDF5Dataset(
-        dataset_name,
+    dataset_root = dataset_path / "datasets"
+    candidates = [dataset_name]
+    if "." not in Path(dataset_name).name:
+        candidates = [
+            f"{dataset_name}.lance",
+            f"{dataset_name}.h5",
+            dataset_name,
+        ]
+
+    resolved_name = None
+    for candidate in candidates:
+        if Path(candidate).is_absolute() or (dataset_root / candidate).exists():
+            resolved_name = candidate
+            break
+
+    dataset = swm.data.load_dataset(
+        resolved_name or dataset_name,
         keys_to_cache=cfg.dataset.keys_to_cache,
         cache_dir=dataset_path,
     )
@@ -65,7 +89,7 @@ def run(cfg: DictConfig):
 
     dataset = get_dataset(cfg, cfg.eval.dataset_name)
     stats_dataset = dataset  # get_dataset(cfg, cfg.dataset.stats)
-    col_name = "episode_idx" if "episode_idx" in dataset.column_names else "ep_idx"
+    col_name = get_episode_index_column(dataset)
     ep_indices, _ = np.unique(stats_dataset.get_col_data(col_name), return_index=True)
 
     process = {}
@@ -110,7 +134,7 @@ def run(cfg: DictConfig):
     max_start_idx = episode_len - cfg.eval.goal_offset_steps - 1
     max_start_idx_dict = {ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)}
     # Map each dataset row’s episode_idx to its max_start_idx
-    col_name = "episode_idx" if "episode_idx" in dataset.column_names else "ep_idx"
+    col_name = get_episode_index_column(dataset)
     max_start_per_row = np.array(
         [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
     )
@@ -130,8 +154,10 @@ def run(cfg: DictConfig):
 
     print(random_episode_indices)
 
-    eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
-    eval_start_idx = dataset.get_row_data(random_episode_indices)["step_idx"]
+    episode_idx_all = dataset.get_col_data(col_name)
+    step_idx_all = dataset.get_col_data("step_idx")
+    eval_episodes = episode_idx_all[random_episode_indices]
+    eval_start_idx = step_idx_all[random_episode_indices]
 
     if len(eval_episodes) < cfg.eval.num_eval:
         raise ValueError("Not enough episodes with sufficient length for evaluation.")

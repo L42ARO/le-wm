@@ -53,6 +53,13 @@ def _data_keys(h5: h5py.File) -> list[str]:
     return keys
 
 
+def _clean_episode_values(values):
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.floating):
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    return list(arr)
+
+
 def convert_hdf5_to_lance(
     source: str | Path,
     dest: str | Path,
@@ -65,14 +72,17 @@ def convert_hdf5_to_lance(
 
     with h5py.File(source, "r") as h5, LanceWriter(dest, mode=mode) as writer:
         keys = _data_keys(h5)
-        for ep_idx, (start, length) in enumerate(_episode_slices(h5)):
-            if limit_episodes is not None and ep_idx >= limit_episodes:
-                break
-            episode = {
-                key: list(h5[key][start : start + length])
-                for key in keys
-            }
-            writer.write_episode(episode)
+
+        def episodes():
+            for ep_idx, (start, length) in enumerate(_episode_slices(h5)):
+                if limit_episodes is not None and ep_idx >= limit_episodes:
+                    break
+                yield {
+                    key: _clean_episode_values(h5[key][start : start + length])
+                    for key in keys
+                }
+
+        writer.write_episodes(episodes())
 
 
 def main() -> None:

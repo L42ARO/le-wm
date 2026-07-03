@@ -16,6 +16,7 @@ PYTHON="$ROOT_DIR/.venv/bin/python"
 RUNS_DIR="${STABLE_PRETRAINING_RUNS_DIR:-$HOME/.cache/stable-pretraining/runs}"
 
 DATA_CONFIG="pusht"
+DATASET_CHOICE=""
 BATCH_SIZE="256"
 NUM_WORKERS="8"
 PREFETCH_FACTOR="1"
@@ -30,10 +31,12 @@ usage() {
   cat <<'USAGE'
 Usage: ./resume_training.sh [options] [extra Hydra overrides...]
 
-Lists recent Stable Pretraining .ckpt files, asks which one to use, and resumes training.
+Prompts for a dataset, lists recent Stable Pretraining .ckpt files, asks which one to use,
+and resumes training.
 The checkpoint is passed to train.py as resume_ckpt_path=..., not through .env.
 
 Defaults:
+  dataset=pusht
   data=pusht
   loader.batch_size=256
   num_workers=8
@@ -43,7 +46,8 @@ Options:
   --batch-size N       Set loader.batch_size.
   --num-workers N      Set num_workers.
   --prefetch-factor N  Set loader.prefetch_factor.
-  --data NAME          Set the Hydra data config.
+  --data NAME          Set the Hydra data config directly.
+  --dataset NAME       Choose dataset preset: tworoom, pusht, cube.
   --ckpt PATH          Resume from this checkpoint instead of auto-detecting.
   --latest             Use the newest checkpoint without prompting for selection.
   --list-count N       Number of recent checkpoints to list. Default: 8.
@@ -53,6 +57,7 @@ Options:
 
 Examples:
   ./resume_training.sh
+  ./resume_training.sh --dataset cube
   ./resume_training.sh --latest
   ./resume_training.sh --batch-size 224 --num-workers 6
   ./resume_training.sh trainer.max_epochs=120
@@ -75,6 +80,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --data)
       DATA_CONFIG="${2:?missing value for --data}"
+      shift 2
+      ;;
+    --dataset)
+      DATASET_CHOICE="${2:?missing value for --dataset}"
       shift 2
       ;;
     --ckpt)
@@ -117,6 +126,57 @@ if [ ! -x "$PYTHON" ]; then
   echo "Error: expected venv python at $PYTHON" >&2
   exit 1
 fi
+
+select_dataset() {
+  if [ -n "$DATASET_CHOICE" ]; then
+    return
+  fi
+
+  echo "Choose dataset to resume:"
+  echo "  1. pusht"
+  echo "  2. tworoom"
+  echo "  3. cube"
+  echo
+  read -r -p "Dataset [1]: " choice
+  choice="${choice:-1}"
+  case "$choice" in
+    1) DATASET_CHOICE="pusht" ;;
+    2) DATASET_CHOICE="tworoom" ;;
+    3) DATASET_CHOICE="cube" ;;
+    pusht|tworoom|cube) DATASET_CHOICE="$choice" ;;
+    *)
+      echo "Error: invalid dataset selection: $choice" >&2
+      exit 1
+      ;;
+  esac
+}
+
+apply_dataset_preset() {
+  case "$DATASET_CHOICE" in
+    pusht)
+      DATA_CONFIG="pusht"
+      ;;
+    tworoom)
+      DATA_CONFIG="tworoom"
+      ;;
+    cube)
+      DATA_CONFIG="ogb"
+      EXTRA_OVERRIDES+=(
+        "data.dataset.name=ogbench/cube_single_expert.lance"
+        "~data.dataset.keys_to_merge"
+      )
+      ;;
+    "")
+      ;;
+    *)
+      echo "Error: unknown dataset preset: $DATASET_CHOICE" >&2
+      exit 1
+      ;;
+  esac
+}
+
+select_dataset
+apply_dataset_preset
 
 if [ -z "$CKPT_PATH" ]; then
   if [ ! -d "$RUNS_DIR" ]; then
@@ -208,6 +268,7 @@ if [ "${#EXTRA_OVERRIDES[@]}" -gt 0 ]; then
   cmd+=("${EXTRA_OVERRIDES[@]}")
 fi
 
+echo "Dataset preset: ${DATASET_CHOICE:-custom}"
 echo "Using checkpoint: $CKPT_PATH"
 echo "Running:"
 printf '  %q' "${cmd[@]}"
