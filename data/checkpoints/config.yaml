@@ -6,7 +6,7 @@ seed: 3072
 img_size: 224
 embed_dim: 192
 history_size: 3
-resume_ckpt_path: /home/ubuntu/le-wm/last.ckpt
+resume_ckpt_path: /home/ubuntu/.cache/stable-pretraining/runs/20260702/080722/a8cc993272b8/checkpoints/last.ckpt
 resume_weights_only: false
 float32_matmul_precision: high
 trainer:
@@ -16,7 +16,7 @@ trainer:
   precision: bf16
   gradient_clip_val: 1.0
 loader:
-  batch_size: 386
+  batch_size: 840
   num_workers: ${num_workers}
   persistent_workers: true
   prefetch_factor: 1
@@ -43,18 +43,16 @@ wandb:
     log_model: false
 data:
   dataset:
+    name: ogbench/cube_single_expert.lance
     num_steps: ${eval:'${num_preds} + ${history_size}'}
     frameskip: 5
-    name: pusht_expert_train.lance
     keys_to_load:
     - pixels
     - action
-    - proprio
-    - state
+    - observation
     keys_to_cache:
     - action
-    - proprio
-    - state
+    - observation
 model:
   _target_: jepa.JEPA
   encoder:
@@ -78,7 +76,7 @@ model:
     emb_dropout: 0.0
   action_encoder:
     _target_: module.Embedder
-    input_dim: 10
+    input_dim: 25
     emb_dim: ${embed_dim}
   projector:
     _target_: module.MLP

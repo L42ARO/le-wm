@@ -23,7 +23,7 @@
   },
   "action_encoder": {
     "_target_": "module.Embedder",
-    "input_dim": 10,
+    "input_dim": 25,
     "emb_dim": 192
   },
   "projector": {
