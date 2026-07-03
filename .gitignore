@@ -8,3 +8,4 @@ __pycache__/
 /outputs/
 *.ckpt
 *.pt
+*.mp4
