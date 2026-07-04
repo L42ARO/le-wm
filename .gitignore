@@ -9,3 +9,6 @@ __pycache__/
 *.ckpt
 *.pt
 *.mp4
+/models/*/evals/*
+!models/*/evals/*.csv
+/models/*/evals/*/
