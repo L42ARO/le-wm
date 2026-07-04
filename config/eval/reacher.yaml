@@ -15,7 +15,8 @@ dataset:
     - action
 
 seed: 42
-policy: random # ckpt name or random
+model_name: ??? # required; outputs are written to models/<model_name>/evals/<policy_name>/
+policy: random # filename under models/<model_name>/weights/ or random
 
 plan_config:
   horizon: 5
@@ -45,4 +46,3 @@ eval:
 
 output:
   filename: dmc_results.txt
-

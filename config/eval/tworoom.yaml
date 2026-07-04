@@ -9,7 +9,8 @@ world:
   max_episode_steps: ??? # make sure it's >= eval_budget
 
 seed: 42
-policy: random # ckpt name or random
+model_name: ??? # required; outputs are written to models/<model_name>/evals/<policy_name>/
+policy: random # filename under models/<model_name>/weights/ or random
 
 dataset:
   stats: ${eval.dataset_name}

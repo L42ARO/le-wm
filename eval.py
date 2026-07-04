@@ -4,6 +4,7 @@ os.environ["MUJOCO_GL"] = "egl"
 
 import time
 from pathlib import Path
+from typing import Any
 
 import hydra
 import numpy as np
@@ -13,6 +14,18 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn import preprocessing
 from torchvision.transforms import v2 as transforms
 import stable_worldmodel as swm
+
+
+def get_results_path(cfg: DictConfig) -> Path:
+    policy_name = Path(cfg.policy).stem if cfg.policy != "random" else "random"
+    return Path(__file__).parent / "models" / cfg.model_name / "evals" / policy_name
+
+
+def get_policy_path(cfg: DictConfig) -> Path | str:
+    if cfg.policy == "random":
+        return "random"
+    return Path(__file__).parent / "models" / cfg.model_name / "weights" / cfg.policy
+
 
 def img_transform(cfg):
     transform = transforms.Compose(
@@ -70,27 +83,18 @@ def get_dataset(cfg, dataset_name):
     )
     return dataset
 
-@hydra.main(version_base=None, config_path="./config/eval", config_name="pusht")
-def run(cfg: DictConfig):
-    """Run evaluation of dinowm vs random policy."""
-    assert (
-        cfg.plan_config.horizon * cfg.plan_config.action_block <= cfg.eval.eval_budget
-    ), "Planning horizon must be smaller than or equal to eval_budget"
 
-    # create world environment
+def build_world_and_process(cfg: DictConfig) -> tuple[Any, Any, dict]:
     cfg.world.max_episode_steps = 2 * cfg.eval.eval_budget
     world = swm.World(**cfg.world, image_shape=(224, 224))
 
-    # create the transform
     transform = {
         "pixels": img_transform(cfg),
         "goal": img_transform(cfg),
     }
 
     dataset = get_dataset(cfg, cfg.eval.dataset_name)
-    stats_dataset = dataset  # get_dataset(cfg, cfg.dataset.stats)
-    col_name = get_episode_index_column(dataset)
-    ep_indices, _ = np.unique(stats_dataset.get_col_data(col_name), return_index=True)
+    stats_dataset = dataset
 
     process = {}
     for col in cfg.dataset.keys_to_cache:
@@ -105,41 +109,37 @@ def run(cfg: DictConfig):
         if col != "action":
             process[f"goal_{col}"] = process[col]
 
-    # -- run evaluation
-    policy = cfg.get("policy", "random")
+    return world, dataset, {"process": process, "transform": transform}
 
-    if policy != "random":
-        model = swm.wm.utils.load_pretrained(cfg.policy)
-        model = model.to("cuda")
-        model = model.eval()
-        model.requires_grad_(False)
-        model.interpolate_pos_encoding = True
-        config = swm.PlanConfig(**cfg.plan_config)
-        solver = hydra.utils.instantiate(cfg.solver, model=model)
-        policy = swm.policy.WorldModelPolicy(
-            solver=solver, config=config, process=process, transform=transform
-        )
 
-    else:
-        policy = swm.policy.RandomPolicy()
+def build_policy(cfg: DictConfig, process: dict, transform: dict):
+    policy_path = get_policy_path(cfg)
+    if policy_path == "random":
+        return swm.policy.RandomPolicy()
 
-    results_path = (
-        Path(swm.data.utils.get_cache_dir(), cfg.policy).parent
-        if cfg.policy != "random"
-        else Path(__file__).parent
+    model = swm.wm.utils.load_pretrained(str(policy_path))
+    model = model.to("cuda")
+    model = model.eval()
+    model.requires_grad_(False)
+    model.interpolate_pos_encoding = True
+    config = swm.PlanConfig(**cfg.plan_config)
+    solver = hydra.utils.instantiate(cfg.solver, model=model)
+    return swm.policy.WorldModelPolicy(
+        solver=solver, config=config, process=process, transform=transform
     )
 
-    # sample the episodes and the starting indices
+
+def get_eval_starts(cfg: DictConfig, dataset) -> tuple[list[int], list[int]]:
+    col_name = get_episode_index_column(dataset)
+    ep_indices, _ = np.unique(dataset.get_col_data(col_name), return_index=True)
+
     episode_len = get_episodes_length(dataset, ep_indices)
     max_start_idx = episode_len - cfg.eval.goal_offset_steps - 1
     max_start_idx_dict = {ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)}
-    # Map each dataset row’s episode_idx to its max_start_idx
-    col_name = get_episode_index_column(dataset)
     max_start_per_row = np.array(
         [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
     )
 
-    # remove all the lines of dataset for which dataset['step_idx'] > max_start_per_row
     valid_mask = dataset.get_col_data("step_idx") <= max_start_per_row
     valid_indices = np.nonzero(valid_mask)[0]
     print(valid_mask.sum(), "valid starting points found for evaluation.")
@@ -148,8 +148,6 @@ def run(cfg: DictConfig):
     random_episode_indices = g.choice(
         len(valid_indices) - 1, size=cfg.eval.num_eval, replace=False
     )
-
-    # sort increasingly to avoid issues with HDF5Dataset indexing
     random_episode_indices = np.sort(valid_indices[random_episode_indices])
 
     print(random_episode_indices)
@@ -162,37 +160,56 @@ def run(cfg: DictConfig):
     if len(eval_episodes) < cfg.eval.num_eval:
         raise ValueError("Not enough episodes with sufficient length for evaluation.")
 
-    world.set_policy(policy)
+    return eval_episodes.tolist(), eval_start_idx.tolist()
 
+
+def write_results(cfg: DictConfig, results_dir: Path, metrics: dict, elapsed: float):
+    results_file = results_dir / cfg.output.filename
+    results_file.parent.mkdir(parents=True, exist_ok=True)
+    with results_file.open("a") as f:
+        f.write("\n")
+        f.write("==== CONFIG ====\n")
+        f.write(OmegaConf.to_yaml(cfg))
+        f.write("\n")
+        f.write("==== RESULTS ====\n")
+        f.write(f"metrics: {metrics}\n")
+        f.write(f"evaluation_time: {elapsed} seconds\n")
+
+
+def evaluate_cfg(cfg: DictConfig) -> dict:
+    assert (
+        cfg.plan_config.horizon * cfg.plan_config.action_block <= cfg.eval.eval_budget
+    ), "Planning horizon must be smaller than or equal to eval_budget"
+
+    world, dataset, resources = build_world_and_process(cfg)
+    policy = build_policy(cfg, resources["process"], resources["transform"])
+    results_path = get_results_path(cfg)
+    eval_episodes, eval_start_idx = get_eval_starts(cfg, dataset)
+
+    world.set_policy(policy)
     results_path.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
     metrics = world.evaluate(
         dataset=dataset,
-        start_steps=eval_start_idx.tolist(),
+        start_steps=eval_start_idx,
         goal_offset=cfg.eval.goal_offset_steps,
         eval_budget=cfg.eval.eval_budget,
-        episodes_idx=eval_episodes.tolist(),
+        episodes_idx=eval_episodes,
         callables=OmegaConf.to_container(cfg.eval.get("callables"), resolve=True),
         video=results_path,
     )
     end_time = time.time()
-    
+
     print(metrics)
+    write_results(cfg, results_path, metrics, end_time - start_time)
+    return metrics
 
-    results_path = results_path / cfg.output.filename
-    results_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with results_path.open("a") as f:
-        f.write("\n")  # separate from previous runs
-
-        f.write("==== CONFIG ====\n")
-        f.write(OmegaConf.to_yaml(cfg))
-        f.write("\n")
-
-        f.write("==== RESULTS ====\n")
-        f.write(f"metrics: {metrics}\n")
-        f.write(f"evaluation_time: {end_time - start_time} seconds\n")
+@hydra.main(version_base=None, config_path="./config/eval", config_name="pusht")
+def run(cfg: DictConfig):
+    """Run evaluation of dinowm vs random policy."""
+    evaluate_cfg(cfg)
 
 
 if __name__ == "__main__":
